@@ -1,0 +1,14 @@
+{
+  "name": "fullstack-template",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reusable full-stack template: Next.js + Express + Postgres + S3 → EC2 via GitHub Actions",
+  "scripts": {
+    "dev:web": "cd apps/web && npm run dev",
+    "dev:api": "cd apps/api-node && npm run dev",
+    "dev": "concurrently \"npm run dev:web\" \"npm run dev:api\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
