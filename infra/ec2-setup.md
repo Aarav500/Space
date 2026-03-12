@@ -21,7 +21,7 @@ ssh -i ~/.ssh/your-key.pem ubuntu@<EC2_PUBLIC_IP>
 # Update system
 sudo apt update && sudo apt upgrade -y
 
-# Install Node.js 20.x
+# Install Node.js 20.x (MUST match CI — see .github/workflows/deploy-ec2.yml)
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 
@@ -44,6 +44,9 @@ sudo chown ubuntu:ubuntu /var/www
 cd /var/www
 git clone https://github.com/<your-org>/fullstack-template.git
 cd fullstack-template
+
+# Make deploy script executable (one-time)
+chmod +x infra/deploy/deploy.sh
 ```
 
 ## 4. Environment Files
@@ -78,21 +81,23 @@ cd ../..
 ## 6. Start with PM2
 
 ```bash
-# Start API
+# Start API (port 4000)
 cd apps/api-node
 pm2 start src/index.js --name api
 
-# (Optional) Start Next.js in production mode
+# Start Next.js in production mode (port 3000)
 cd ../web
 pm2 start npm --name web -- start
 
-# Save PM2 list for auto-restart
+# Save PM2 list for auto-restart on reboot
 pm2 save
 
-# Setup PM2 startup script
+# Setup PM2 startup script (run once)
 pm2 startup
 # Follow the printed command (copy/paste it)
 ```
+
+> **Note:** Both `api` and `web` PM2 processes are restarted by `deploy.sh` on each deploy.
 
 ## 7. Reverse Proxy (Nginx)
 

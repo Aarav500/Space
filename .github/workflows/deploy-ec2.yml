@@ -1,13 +1,69 @@
-name: Deploy to EC2
+name: Test & Deploy to EC2
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
+  # ─── Test: run backend tests + frontend build ─────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dependencies
+        run: npm ci || npm install
+
+      - name: Backend – install & test
+        run: |
+          cd apps/api-node
+          npm ci || npm install
+          npm test
+
+      - name: Frontend – install & build
+        run: |
+          cd apps/web
+          npm ci || npm install
+          npm run build
+
+  # ─── Secrets Scan: detect leaked credentials ──────────────────────
+  secrets-scan:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.18.4"
+          wget -q "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -O gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Run Gitleaks
+        run: gitleaks detect --source . --verbose --redact --exit-code 1
+
+  # ─── Deploy: SSH to EC2 and run deploy.sh ─────────────────────────
   deploy:
     name: Deploy to EC2
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs: [test, secrets-scan]
 
     steps:
       - name: Checkout code

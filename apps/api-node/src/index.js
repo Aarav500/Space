@@ -1,43 +1,51 @@
-require("dotenv").config();
+/**
+ * Server entry point
+ *
+ * Imports the Express app from ./app and starts the HTTP server.
+ * Handles graceful shutdown for PM2 compatibility (SIGTERM + SIGINT).
+ */
 
-const express = require("express");
-const cors = require("cors");
+const { app } = require("./app");
+const { shutdownDb } = require("./db");
 
-const app = express();
 const PORT = process.env.PORT || 4000;
 
-/* ────────────────────────── Middleware ────────────────────────── */
-app.use(express.json());
-app.use(
-  cors({
-    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
-  })
-);
-
-/* ────────────────────────── Health check ──────────────────────── */
-app.get("/health", (_req, res) => {
-  res.json({
-    ok: true,
-    service: "api-node",
-    time: new Date().toISOString(),
-  });
-});
-
-/* ────────────────────────── API routes ────────────────────────── */
-// TODO: Register entity routes here
-// Example:
-//   const usersRouter = require("./routes/users");
-//   app.use("/api/users", usersRouter);
-
-/* ────────────────────────── Error handler ─────────────────────── */
-app.use((err, _req, res, _next) => {
-  console.error("[ERROR]", err.message);
-  res.status(err.status || 500).json({
-    error: err.message || "Internal server error",
-  });
-});
-
-/* ────────────────────────── Start server ──────────────────────── */
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`✅ api-node running on http://localhost:${PORT}`);
 });
+
+/* ────────────────────────── Graceful shutdown ─────────────────────── */
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`\n⏳ Received ${signal}. Shutting down gracefully...`);
+
+  // 1. Stop accepting new connections
+  server.close(async () => {
+    console.log("   HTTP server closed.");
+
+    // 2. Close DB pool
+    try {
+      await shutdownDb();
+      console.log("   DB pool closed.");
+    } catch (err) {
+      console.error("   Error closing DB pool:", err.message);
+    }
+
+    console.log("👋 Shutdown complete.");
+    process.exit(0);
+  });
+
+  // Force exit after 10s if graceful shutdown stalls
+  setTimeout(() => {
+    console.error("⚠️  Forced exit after 10s timeout.");
+    process.exit(1);
+  }, 10_000);
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
