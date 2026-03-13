@@ -16,7 +16,7 @@ interface SatelliteRiskCardProps {
 }
 
 export default function SatelliteRiskCard({ satellite, onClick }: SatelliteRiskCardProps) {
-  const riskPercent = Math.min(satellite.current_risk_score * 1e6, 100);
+  const riskPercent = Math.min(Number(satellite.current_risk_score || 0) * 1e6, 100);
 
   return (
     <button
@@ -37,7 +37,7 @@ export default function SatelliteRiskCard({ satellite, onClick }: SatelliteRiskC
       <div className="mt-4 flex items-center justify-between text-sm">
         <span className="text-gray-400">{satellite.orbit_type}</span>
         <span className="text-gray-500 text-xs">
-          Pc: {satellite.current_risk_score?.toExponential(2) || "—"}
+          Pc: {Number(satellite.current_risk_score || 0).toExponential(2)}
         </span>
       </div>
 

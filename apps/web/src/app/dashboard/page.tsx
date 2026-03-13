@@ -249,7 +249,7 @@ export default function DashboardPage() {
                 <div
                   className="absolute bottom-0 left-0 h-[2px] rounded-full opacity-50"
                   style={{
-                    width: `${Math.min(sat.current_risk_score * 1e6, 100)}%`,
+                    width: `${Math.min(Number(sat.current_risk_score || 0) * 1e6, 100)}%`,
                     background: "linear-gradient(90deg, #10b981, #f59e0b, #ef4444)",
                   }}
                 />
@@ -265,7 +265,7 @@ export default function DashboardPage() {
                 <div className="mt-4 flex items-center justify-between text-sm">
                   <span className="text-gray-500">{sat.orbit_type}</span>
                   <span className="text-gray-600 text-xs font-mono tabular-nums">
-                    Pc {sat.current_risk_score?.toExponential(2) || "—"}
+                    Pc {Number(sat.current_risk_score || 0).toExponential(2)}
                   </span>
                 </div>
 
