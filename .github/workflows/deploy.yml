@@ -318,3 +318,230 @@ jobs:
           echo "| EC2 | \`${{ env.EC2_INSTANCE_ID }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| API | \`${{ env.API_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Web | \`${{ env.WEB_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  # ────────────────────────────────────────────────────────────
+  # Job 5: Post-Deploy Diagnostics
+  # Runs lightweight curl checks against the live site after deploy.
+  # Fails the job if any critical check fails.
+  # ────────────────────────────────────────────────────────────
+  post-deploy-diagnostics:
+    name: Post-Deploy Diagnostics
+    runs-on: ubuntu-latest
+    needs: [deploy, build-push]
+    if: success()
+    env:
+      FRONTEND_URL: http://54.89.165.112
+      API_URL: http://54.89.165.112/api
+    steps:
+      - name: Wait for services to stabilize
+        run: sleep 30
+
+      - name: API Health Check
+        id: health
+        run: |
+          echo "## API Health Check" >> $GITHUB_STEP_SUMMARY
+          HTTP_CODE=$(curl -sS -o /tmp/health.json -w "%{http_code}" --max-time 15 "${{ env.API_URL }}/health" 2>/dev/null || echo "000")
+          LATENCY=$(curl -sS -o /dev/null -w "%{time_total}" --max-time 15 "${{ env.API_URL }}/health" 2>/dev/null || echo "timeout")
+
+          echo "health_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "| API Health | ✅ 200 (${LATENCY}s) |" >> $GITHUB_STEP_SUMMARY
+            # Verify JSON structure
+            if jq -e '.ok' /tmp/health.json > /dev/null 2>&1; then
+              echo "| JSON Valid | ✅ ok=true |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| JSON Valid | ⚠️ Missing 'ok' key |" >> $GITHUB_STEP_SUMMARY
+            fi
+            # Check circuit breakers
+            CB_CELESTRAK=$(jq -r '.circuitBreakers.celestrak // "unknown"' /tmp/health.json 2>/dev/null)
+            CB_NOAA=$(jq -r '.circuitBreakers.noaa // "unknown"' /tmp/health.json 2>/dev/null)
+            echo "| CelesTrak Breaker | ${CB_CELESTRAK} |" >> $GITHUB_STEP_SUMMARY
+            echo "| NOAA Breaker | ${CB_NOAA} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| API Health | ❌ HTTP ${HTTP_CODE} |" >> $GITHUB_STEP_SUMMARY
+            echo "::error::API health check failed with HTTP ${HTTP_CODE}"
+          fi
+
+      - name: Key Endpoint Checks
+        id: endpoints
+        run: |
+          echo "## Endpoint Checks" >> $GITHUB_STEP_SUMMARY
+          echo "| Endpoint | Status | Notes |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          FAIL=0
+
+          # Space weather (may require auth → 401 is acceptable)
+          SW_CODE=$(curl -sS -o /tmp/sw.json -w "%{http_code}" --max-time 15 "${{ env.API_URL }}/space-weather/current" 2>/dev/null || echo "000")
+          if [ "$SW_CODE" = "200" ] || [ "$SW_CODE" = "401" ]; then
+            echo "| /space-weather/current | ✅ ${SW_CODE} | Expected |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| /space-weather/current | ❌ ${SW_CODE} | Unexpected |" >> $GITHUB_STEP_SUMMARY
+            FAIL=1
+          fi
+
+          # Satellites (requires JWT → expect 401 with JSON body)
+          SAT_CODE=$(curl -sS -o /tmp/sat.json -w "%{http_code}" --max-time 15 "${{ env.API_URL }}/satellites" 2>/dev/null || echo "000")
+          if [ "$SAT_CODE" = "401" ]; then
+            # Verify it returns JSON, not HTML
+            if jq -e '.error' /tmp/sat.json > /dev/null 2>&1; then
+              echo "| /satellites | ✅ 401 (JSON) | Auth gate working |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| /satellites | ⚠️ 401 (non-JSON) | Auth returns unexpected format |" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "$SAT_CODE" = "200" ]; then
+            echo "| /satellites | ✅ 200 | Endpoint accessible |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| /satellites | ❌ ${SAT_CODE} | Unexpected |" >> $GITHUB_STEP_SUMMARY
+            FAIL=1
+          fi
+
+          # Dashboard overview
+          DASH_CODE=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 "${{ env.API_URL }}/dashboard/overview" 2>/dev/null || echo "000")
+          if [ "$DASH_CODE" = "200" ] || [ "$DASH_CODE" = "401" ]; then
+            echo "| /dashboard/overview | ✅ ${DASH_CODE} | Expected |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| /dashboard/overview | ❌ ${DASH_CODE} | Unexpected |" >> $GITHUB_STEP_SUMMARY
+            FAIL=1
+          fi
+
+          echo "endpoints_fail=${FAIL}" >> "$GITHUB_OUTPUT"
+
+      - name: CORS Preflight Check
+        id: cors
+        run: |
+          echo "## CORS Preflight" >> $GITHUB_STEP_SUMMARY
+          curl -sS -D /tmp/cors_headers.txt -o /dev/null \
+            -X OPTIONS \
+            -H "Origin: ${{ env.FRONTEND_URL }}" \
+            -H "Access-Control-Request-Method: POST" \
+            -H "Access-Control-Request-Headers: Content-Type, Authorization" \
+            --max-time 15 \
+            "${{ env.API_URL }}/satellites" 2>/dev/null || true
+
+          echo "| Header | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+
+          CORS_FAIL=0
+          ACAO=$(grep -i "access-control-allow-origin" /tmp/cors_headers.txt 2>/dev/null | head -1 | tr -d '\r')
+          ACAM=$(grep -i "access-control-allow-methods" /tmp/cors_headers.txt 2>/dev/null | head -1 | tr -d '\r')
+
+          if [ -n "$ACAO" ]; then
+            echo "| Allow-Origin | ✅ ${ACAO} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Allow-Origin | ❌ Missing |" >> $GITHUB_STEP_SUMMARY
+            CORS_FAIL=1
+          fi
+
+          if [ -n "$ACAM" ]; then
+            echo "| Allow-Methods | ✅ ${ACAM} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Allow-Methods | ❌ Missing |" >> $GITHUB_STEP_SUMMARY
+            CORS_FAIL=1
+          fi
+
+          echo "cors_fail=${CORS_FAIL}" >> "$GITHUB_OUTPUT"
+
+      - name: Frontend Reachability
+        id: frontend
+        run: |
+          echo "## Frontend Check" >> $GITHUB_STEP_SUMMARY
+          FE_CODE=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 15 "${{ env.FRONTEND_URL }}" 2>/dev/null || echo "000")
+          if [ "$FE_CODE" = "200" ]; then
+            echo "✅ Frontend reachable (HTTP ${FE_CODE})" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Frontend unreachable (HTTP ${FE_CODE})" >> $GITHUB_STEP_SUMMARY
+            echo "::error::Frontend not reachable at ${{ env.FRONTEND_URL }}"
+          fi
+          echo "frontend_code=${FE_CODE}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Diagnostics Report
+        if: always()
+        run: |
+          TIMESTAMP=$(date -u +"%Y%m%d-%H%M%S")
+          REPORT="/tmp/diagnostics-${TIMESTAMP}.md"
+
+          cat > "$REPORT" << 'EOF'
+          # Post-Deploy Diagnostics Report
+          EOF
+
+          echo "**Timestamp:** $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$REPORT"
+          echo "**Tag:** ${{ needs.build-push.outputs.tag }}" >> "$REPORT"
+          echo "" >> "$REPORT"
+          echo "## Results" >> "$REPORT"
+          echo "" >> "$REPORT"
+          echo "| Check | Status |" >> "$REPORT"
+          echo "|-------|--------|" >> "$REPORT"
+
+          # API Health
+          if [ "${{ steps.health.outputs.health_code }}" = "200" ]; then
+            echo "| API Health | ✅ |" >> "$REPORT"
+          else
+            echo "| API Health | ❌ HTTP ${{ steps.health.outputs.health_code }} |" >> "$REPORT"
+          fi
+
+          # Endpoints
+          if [ "${{ steps.endpoints.outputs.endpoints_fail }}" = "0" ]; then
+            echo "| Endpoints | ✅ |" >> "$REPORT"
+          else
+            echo "| Endpoints | ❌ |" >> "$REPORT"
+          fi
+
+          # CORS
+          if [ "${{ steps.cors.outputs.cors_fail }}" = "0" ]; then
+            echo "| CORS | ✅ |" >> "$REPORT"
+          else
+            echo "| CORS | ❌ |" >> "$REPORT"
+          fi
+
+          # Frontend
+          if [ "${{ steps.frontend.outputs.frontend_code }}" = "200" ]; then
+            echo "| Frontend | ✅ |" >> "$REPORT"
+          else
+            echo "| Frontend | ❌ HTTP ${{ steps.frontend.outputs.frontend_code }} |" >> "$REPORT"
+          fi
+
+          cat "$REPORT"
+          echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Diagnostics Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-deploy-diagnostics
+          path: /tmp/diagnostics-*.md
+          retention-days: 30
+
+      - name: Fail if critical checks failed
+        if: always()
+        run: |
+          FAILED=0
+
+          if [ "${{ steps.health.outputs.health_code }}" != "200" ]; then
+            echo "::error::API health check failed"
+            FAILED=1
+          fi
+
+          if [ "${{ steps.endpoints.outputs.endpoints_fail }}" != "0" ]; then
+            echo "::error::One or more endpoint checks failed"
+            FAILED=1
+          fi
+
+          if [ "${{ steps.cors.outputs.cors_fail }}" != "0" ]; then
+            echo "::warning::CORS preflight check failed — consider running /prod-auto-fix"
+            # CORS failure is a warning, not a hard fail
+          fi
+
+          if [ "${{ steps.frontend.outputs.frontend_code }}" != "200" ]; then
+            echo "::error::Frontend is not reachable"
+            FAILED=1
+          fi
+
+          if [ "$FAILED" = "1" ]; then
+            echo "❌ Post-deploy diagnostics detected issues. See report artifact."
+            exit 1
+          else
+            echo "✅ All post-deploy diagnostics passed."
+          fi
