@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+import { API_BASE } from "./config";
 
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -13,7 +13,7 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: "Request failed" }));
@@ -27,9 +27,9 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
 
 export const authApi = {
   register: (email: string, password: string, orgName: string) =>
-    apiFetch("/api/auth/register", { method: "POST", body: JSON.stringify({ email, password, orgName }) }),
+    apiFetch("/auth/register", { method: "POST", body: JSON.stringify({ email, password, orgName }) }),
   login: (email: string, password: string) =>
-    apiFetch("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+    apiFetch("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
 };
 
 /* ─── Satellites ───────────────────────────────────────────────────── */
@@ -56,17 +56,17 @@ export interface Conjunction {
 }
 
 export const satelliteApi = {
-  list: () => apiFetch<{ data: Satellite[] }>("/api/satellites"),
+  list: () => apiFetch<{ data: Satellite[] }>("/satellites"),
   add: (noradId: number, name?: string) =>
-    apiFetch<{ data: Satellite }>("/api/satellites", { method: "POST", body: JSON.stringify({ noradId, name }) }),
+    apiFetch<{ data: Satellite }>("/satellites", { method: "POST", body: JSON.stringify({ noradId, name }) }),
   remove: (id: string) =>
-    apiFetch("/api/satellites/" + id, { method: "DELETE" }),
+    apiFetch("/satellites/" + id, { method: "DELETE" }),
   getRisk: (id: string) =>
-    apiFetch<{ riskScore: number; riskLevel: string; forecast72h: { hour: number; predictedPc: number; riskLevel: string }[]; conjunctions: Conjunction[] }>(`/api/satellites/${id}/risk`),
+    apiFetch<{ riskScore: number; riskLevel: string; forecast72h: { hour: number; predictedPc: number; riskLevel: string }[]; conjunctions: Conjunction[] }>(`/satellites/${id}/risk`),
   getConjunctions: (id: string, days = 7) =>
-    apiFetch<{ data: Conjunction[] }>(`/api/satellites/${id}/conjunctions?days=${days}`),
+    apiFetch<{ data: Conjunction[] }>(`/satellites/${id}/conjunctions?days=${days}`),
   getRiskHistory: (id: string, hours = 168) =>
-    apiFetch<{ data: Record<string, unknown>[] }>(`/api/satellites/${id}/risk-history?hours=${hours}`),
+    apiFetch<{ data: Record<string, unknown>[] }>(`/satellites/${id}/risk-history?hours=${hours}`),
 };
 
 /* ─── Dashboard ────────────────────────────────────────────────────── */
@@ -81,24 +81,24 @@ export interface DashboardOverview {
 }
 
 export const dashboardApi = {
-  overview: () => apiFetch<DashboardOverview>("/api/dashboard/overview"),
+  overview: () => apiFetch<DashboardOverview>("/dashboard/overview"),
 };
 
 /* ─── Space Weather ────────────────────────────────────────────────── */
 
 export const weatherApi = {
-  current: () => apiFetch<{ kp: number; f107: number; stormLevel: string | null; timestamp: string }>("/api/space-weather/current"),
-  forecast: () => apiFetch<{ data: Record<string, unknown>[] }>("/api/space-weather/forecast"),
-  history: (hours = 72) => apiFetch<{ data: Record<string, unknown>[] }>(`/api/space-weather/history?hours=${hours}`),
+  current: () => apiFetch<{ kp: number; f107: number; stormLevel: string | null; timestamp: string }>("/space-weather/current"),
+  forecast: () => apiFetch<{ data: Record<string, unknown>[] }>("/space-weather/forecast"),
+  history: (hours = 72) => apiFetch<{ data: Record<string, unknown>[] }>(`/space-weather/history?hours=${hours}`),
 };
 
 /* ─── Alerts ───────────────────────────────────────────────────────── */
 
 export const alertApi = {
-  list: (limit = 50) => apiFetch<{ data: Record<string, unknown>[] }>(`/api/alerts?limit=${limit}`),
+  list: (limit = 50) => apiFetch<{ data: Record<string, unknown>[] }>(`/alerts?limit=${limit}`),
   configure: (satelliteId: string | null, pcThreshold: number, channels: string[]) =>
-    apiFetch("/api/alerts/configure", { method: "POST", body: JSON.stringify({ satelliteId, pcThreshold, channels }) }),
-  getConfig: () => apiFetch<{ data: Record<string, unknown>[] }>("/api/alerts/config"),
+    apiFetch("/alerts/configure", { method: "POST", body: JSON.stringify({ satelliteId, pcThreshold, channels }) }),
+  getConfig: () => apiFetch<{ data: Record<string, unknown>[] }>("/alerts/config"),
 };
 
 /* ─── Coverage ─────────────────────────────────────────────────────── */
@@ -116,8 +116,8 @@ export interface CoveragePolicy {
 
 export const coverageApi = {
   quote: (satelliteId: string, hours: number) =>
-    apiFetch<{ hourlyCents: number; totalCents: number; maxPayoutCents: number; currency: string }>("/api/coverage/quote", { method: "POST", body: JSON.stringify({ satelliteId, hours }) }),
+    apiFetch<{ hourlyCents: number; totalCents: number; maxPayoutCents: number; currency: string }>("/coverage/quote", { method: "POST", body: JSON.stringify({ satelliteId, hours }) }),
   checkout: (satelliteId: string, hours: number) =>
-    apiFetch<{ sessionId: string; url: string }>("/api/coverage/checkout", { method: "POST", body: JSON.stringify({ satelliteId, hours }) }),
-  policies: () => apiFetch<{ data: CoveragePolicy[] }>("/api/coverage/policies"),
+    apiFetch<{ sessionId: string; url: string }>("/coverage/checkout", { method: "POST", body: JSON.stringify({ satelliteId, hours }) }),
+  policies: () => apiFetch<{ data: CoveragePolicy[] }>("/coverage/policies"),
 };

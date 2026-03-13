@@ -11,7 +11,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build-time env — frontend paths already include /api, nginx proxies /api → Express
-ENV NEXT_PUBLIC_API_URL=
+ENV NEXT_PUBLIC_API_URL=/api
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build

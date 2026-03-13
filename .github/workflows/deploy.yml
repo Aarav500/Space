@@ -453,6 +453,41 @@ jobs:
 
           echo "cors_fail=${CORS_FAIL}" >> "$GITHUB_OUTPUT"
 
+      # ── Satellite Tracking Smoke Test ─────────────────────────
+      # Mirrors the "Track Satellite" UI flow (POST /api/satellites)
+      # to catch localhost misconfigurations early.
+      - name: Satellite Tracking Smoke Test
+        id: sat_smoke
+        run: |
+          echo "## Satellite Tracking Smoke Test" >> $GITHUB_STEP_SUMMARY
+          SAT_SMOKE=$(curl -sS -o /tmp/sat_smoke.json -w "%{http_code}" \
+            -X POST "${{ env.API_URL }}/satellites" \
+            -H "Content-Type: application/json" \
+            -d '{"noradId":25544,"name":"ISS"}' \
+            --max-time 15 2>/dev/null || echo "000")
+
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          SAT_SMOKE_FAIL=0
+          if echo "$SAT_SMOKE" | grep -qE "^2"; then
+            echo "| POST /satellites | ✅ ${SAT_SMOKE} (created) |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$SAT_SMOKE" = "401" ]; then
+            # 401 is acceptable — auth gate is working, endpoint is reachable
+            if jq -e '.error' /tmp/sat_smoke.json > /dev/null 2>&1; then
+              echo "| POST /satellites | ✅ ${SAT_SMOKE} (JSON auth gate) |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| POST /satellites | ⚠️ ${SAT_SMOKE} (non-JSON auth) |" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "$SAT_SMOKE" = "409" ]; then
+            echo "| POST /satellites | ✅ ${SAT_SMOKE} (already tracked) |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| POST /satellites | ❌ ${SAT_SMOKE} (unreachable — possible localhost bug) |" >> $GITHUB_STEP_SUMMARY
+            SAT_SMOKE_FAIL=1
+          fi
+
+          echo "sat_smoke_fail=${SAT_SMOKE_FAIL}" >> "$GITHUB_OUTPUT"
+
       - name: Frontend Reachability
         id: frontend
         run: |
@@ -512,6 +547,13 @@ jobs:
             echo "| Frontend | ❌ HTTP ${{ steps.frontend.outputs.frontend_code }} |" >> "$REPORT"
           fi
 
+          # Satellite Smoke Test
+          if [ "${{ steps.sat_smoke.outputs.sat_smoke_fail }}" = "0" ]; then
+            echo "| Sat Smoke Test | ✅ |" >> "$REPORT"
+          else
+            echo "| Sat Smoke Test | ❌ (possible localhost bug) |" >> "$REPORT"
+          fi
+
           cat "$REPORT"
           echo "report_path=${REPORT}" >> "$GITHUB_OUTPUT"
 
@@ -545,6 +587,11 @@ jobs:
 
           if [ "${{ steps.frontend.outputs.frontend_code }}" != "200" ]; then
             echo "::error::Frontend is not reachable"
+            FAILED=1
+          fi
+
+          if [ "${{ steps.sat_smoke.outputs.sat_smoke_fail }}" != "0" ]; then
+            echo "::error::Satellite tracking smoke test failed — frontend may still point at localhost"
             FAILED=1
           fi
 
