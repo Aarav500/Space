@@ -167,3 +167,33 @@ sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d yourdomain.com
 # Follow prompts — auto-renew is configured by default
 ```
+
+---
+
+## 11. Docker-Based Deployment (Recommended)
+
+Instead of PM2, you can use Docker Compose + GitHub Actions for a fully automated pipeline.
+
+### One-Time Setup
+
+```bash
+# On a fresh EC2 Ubuntu 22.04 instance:
+sudo bash infra/ec2-init.sh
+
+# Edit credentials:
+nano /var/www/app/.env
+
+# Copy compose files from repo:
+cd /var/www/app
+curl -O https://raw.githubusercontent.com/Aarav500/Space/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/Aarav500/Space/main/nginx.conf
+```
+
+### How Deploys Work
+
+1. Push to `main` → GitHub Actions runs tests → builds Docker images → pushes to Docker Hub
+2. Actions sends SSM command to EC2 → pulls images → `docker compose up -d`
+3. Post-deploy health check + S3 sync runs automatically
+
+See: `.github/workflows/deploy.yml`, `docker-compose.yml`, `nginx.conf`
+
