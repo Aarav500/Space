@@ -83,11 +83,15 @@ app.use(rateLimiter({ windowMs: 60_000, max: 100 }));
 const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:3000")
   .split(",")
   .map((o) => o.trim());
+const allowAll = allowedOrigins.includes("*");
 app.use(
   cors({
     origin: (origin, cb) => {
       // Allow requests with no origin (server-to-server, curl, health checks)
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      if (!origin) return cb(null, true);
+      // If CORS_ORIGIN=* allow everything
+      if (allowAll) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
       cb(new Error(`CORS: origin ${origin} not allowed`));
     },
     credentials: true,

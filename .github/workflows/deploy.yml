@@ -117,28 +117,32 @@ jobs:
       - name: Write .env file to EC2
         id: envfile
         run: |
+          # Build .env content locally (no shell escaping issues)
+          ENV_CONTENT=$(cat <<'LOCALEOF'
+          GHCR_OWNER=aarav500
+          TAG=latest
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          JWT_EXPIRES_IN=1h
+          CORS_ORIGIN=*
+          SPACE_TRACK_USERNAME=${{ secrets.SPACE_TRACK_USERNAME }}
+          SPACE_TRACK_PASSWORD=${{ secrets.SPACE_TRACK_PASSWORD }}
+          NOAA_SWPC_BASE_URL=https://services.swpc.noaa.gov
+          CELESTRAK_BASE_URL=https://celestrak.org
+          AWS_REGION=us-east-1
+          AWS_S3_BUCKET=spaceinsurance
+          LOCALEOF
+          )
+          # Remove leading whitespace from heredoc indentation
+          ENV_CONTENT=$(echo "$ENV_CONTENT" | sed 's/^          //')
+          # Base64 encode to avoid any SSM JSON/shell quoting issues
+          B64=$(echo "$ENV_CONTENT" | base64 -w 0)
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
             --comment "Write .env to EC2" \
             --timeout-seconds 60 \
-            --parameters commands='[
-              "echo GHCR_OWNER=aarav500 > /var/www/app/.env",
-              "echo TAG=latest >> /var/www/app/.env",
-              "echo DATABASE_URL=${{ secrets.DATABASE_URL }} >> /var/www/app/.env",
-              "echo JWT_SECRET=${{ secrets.JWT_SECRET }} >> /var/www/app/.env",
-              "echo JWT_EXPIRES_IN=1h >> /var/www/app/.env",
-              "echo CORS_ORIGIN=* >> /var/www/app/.env",
-              "echo SPACE_TRACK_USERNAME=${{ secrets.SPACE_TRACK_USERNAME }} >> /var/www/app/.env",
-              "echo SPACE_TRACK_PASSWORD=${{ secrets.SPACE_TRACK_PASSWORD }} >> /var/www/app/.env",
-              "echo NOAA_SWPC_BASE_URL=https://services.swpc.noaa.gov >> /var/www/app/.env",
-              "echo CELESTRAK_BASE_URL=https://celestrak.org >> /var/www/app/.env",
-              "echo AWS_REGION=us-east-1 >> /var/www/app/.env",
-              "echo AWS_S3_BUCKET=spaceinsurance >> /var/www/app/.env",
-              "chown ubuntu:ubuntu /var/www/app/.env",
-              "chmod 600 /var/www/app/.env",
-              "echo .env written successfully"
-            ]' \
+            --parameters commands="[\"echo $B64 | base64 -d > /var/www/app/.env\",\"chown ubuntu:ubuntu /var/www/app/.env\",\"chmod 600 /var/www/app/.env\",\"echo .env written with $(echo $ENV_CONTENT | grep -c =) variables\"]" \
             --output text \
             --query "Command.CommandId")
           echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
