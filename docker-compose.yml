@@ -8,13 +8,13 @@
 # Required .env file on EC2 (see infra/ec2-init.sh):
 #   DATABASE_URL, JWT_SECRET, SPACE_TRACK_USERNAME,
 #   SPACE_TRACK_PASSWORD, NOAA_SWPC_BASE_URL, AWS_REGION,
-#   AWS_S3_BUCKET, DOCKERHUB_USERNAME
+#   AWS_S3_BUCKET, GHCR_OWNER
 # ============================================================
 
 services:
   # ── Express API ─────────────────────────────────────────────
   api:
-    image: ${DOCKERHUB_USERNAME}/orbitshield-api:${TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER:-aarav500}/orbitshield-api:${TAG:-latest}
     container_name: orbitshield-api
     restart: unless-stopped
     expose:
@@ -49,7 +49,7 @@ services:
 
   # ── Next.js Frontend ───────────────────────────────────────
   web:
-    image: ${DOCKERHUB_USERNAME}/orbitshield-web:${TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER:-aarav500}/orbitshield-web:${TAG:-latest}
     container_name: orbitshield-web
     restart: unless-stopped
     expose:

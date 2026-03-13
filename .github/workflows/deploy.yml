@@ -26,8 +26,13 @@ env:
   AWS_REGION: us-east-1
   EC2_INSTANCE_ID: i-0a2969b26c6b89544
   S3_BUCKET: spaceinsurance
-  API_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/orbitshield-api
-  WEB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/orbitshield-web
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/${{ github.repository_owner }}/orbitshield-api
+  WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/orbitshield-web
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   # ────────────────────────────────────────────────────────────
@@ -59,7 +64,7 @@ jobs:
         run: npx jest --runInBand --forceExit
 
   # ────────────────────────────────────────────────────────────
-  # Job 2: Build & Push Docker Images
+  # Job 2: Build & Push Docker Images (GitHub Container Registry)
   # ────────────────────────────────────────────────────────────
   build-push:
     name: Build & Push Images
@@ -86,11 +91,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push API image
         uses: docker/build-push-action@v5
@@ -142,7 +148,6 @@ jobs:
               "cd /var/www/app",
               "echo \"── Pulling latest images ──\"",
               "export TAG=${{ needs.build-push.outputs.tag }}",
-              "export DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}",
               "source .env",
               "docker compose pull",
               "echo \"── Starting services ──\"",

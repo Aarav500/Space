@@ -76,7 +76,7 @@ if [ ! -f "$ENV_FILE" ]; then
   echo "📝 Creating .env template..."
   cat > "$ENV_FILE" << 'ENVEOF'
 # ── Docker / Deployment ──────────────────────────────────────
-DOCKERHUB_USERNAME=CHANGE_ME
+GHCR_OWNER=aarav500
 TAG=latest
 
 # ── Database (Railway Postgres) ──────────────────────────────
