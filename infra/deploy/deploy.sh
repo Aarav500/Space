@@ -37,6 +37,7 @@ npm install --production
 echo "→ Building frontend..."
 cd "$APP_DIR/apps/web"
 npm install
+export NEXT_PUBLIC_API_URL=/api
 npm run build
 
 # 4. Install backend dependencies
