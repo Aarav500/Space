@@ -1,6 +1,6 @@
 # ============================================================
 # OrbitShield — CI/CD Pipeline
-# Test → Build → Deploy to EC2 via SSM
+# Test → Build → Setup EC2 → Deploy via SSM
 #
 # Reusable for all fullstack-template projects.
 # To adapt: change image names, EC2 instance ID, S3 bucket.
@@ -64,7 +64,142 @@ jobs:
         run: npx jest --runInBand --forceExit
 
   # ────────────────────────────────────────────────────────────
-  # Job 2: Build & Push Docker Images (GitHub Container Registry)
+  # Job 2: Setup EC2 (install Docker, create dirs, write .env)
+  # ────────────────────────────────────────────────────────────
+  setup-ec2:
+    name: Setup EC2
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout (for compose + nginx files)
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Docker & dependencies on EC2
+        id: setup
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Setup EC2 — install Docker & prerequisites" \
+            --timeout-seconds 600 \
+            --parameters commands='[
+              "set -euo pipefail",
+              "echo \"═══ OrbitShield EC2 Setup ═══\"",
+
+              "echo \"── 1. System update ──\"",
+              "apt-get update -y",
+              "DEBIAN_FRONTEND=noninteractive apt-get upgrade -y",
+
+              "echo \"── 2. Install Docker (if not present) ──\"",
+              "if ! command -v docker &>/dev/null; then apt-get install -y ca-certificates curl gnupg lsb-release && install -m 0755 -d /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && chmod a+r /etc/apt/keyrings/docker.gpg && echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable\" | tee /etc/apt/sources.list.d/docker.list > /dev/null && apt-get update -y && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && usermod -aG docker ubuntu && echo \"✅ Docker installed\"; else echo \"✅ Docker already installed: $(docker --version)\"; fi",
+
+              "echo \"── 3. Install AWS CLI v2 (if not present) ──\"",
+              "if ! command -v aws &>/dev/null; then apt-get install -y unzip && curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip && unzip -qo /tmp/awscliv2.zip -d /tmp && /tmp/aws/install --update && rm -rf /tmp/aws /tmp/awscliv2.zip && echo \"✅ AWS CLI installed\"; else echo \"✅ AWS CLI already installed\"; fi",
+
+              "echo \"── 4. Create app directory ──\"",
+              "mkdir -p /var/www/app/data",
+              "chown -R ubuntu:ubuntu /var/www/app",
+
+              "echo \"── 5. Configure Docker log rotation ──\"",
+              "cat > /etc/docker/daemon.json <<DJSON\n{\"log-driver\":\"json-file\",\"log-opts\":{\"max-size\":\"10m\",\"max-file\":\"3\"}}\nDJSON",
+              "systemctl restart docker || systemctl start docker",
+
+              "echo \"✅ EC2 setup complete\""
+            ]' \
+            --output text \
+            --query "Command.CommandId")
+
+          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
+          echo "📡 Setup Command ID: ${COMMAND_ID}"
+
+      - name: Wait for EC2 setup to complete
+        run: |
+          echo "⏳ Waiting for EC2 setup (may take 2-3 min on first run)..."
+          for i in $(seq 1 60); do
+            RESULT=$(aws ssm get-command-invocation \
+              --command-id "${{ steps.setup.outputs.command_id }}" \
+              --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+
+            if [ "$RESULT" = "Success" ]; then
+              echo "✅ EC2 setup succeeded!"
+              exit 0
+            elif [ "$RESULT" = "Failed" ] || [ "$RESULT" = "TimedOut" ] || [ "$RESULT" = "Cancelled" ]; then
+              echo "❌ EC2 setup failed with status: ${RESULT}"
+              aws ssm get-command-invocation \
+                --command-id "${{ steps.setup.outputs.command_id }}" \
+                --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+                --query "StandardErrorContent" --output text 2>/dev/null || true
+              aws ssm get-command-invocation \
+                --command-id "${{ steps.setup.outputs.command_id }}" \
+                --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" --output text 2>/dev/null || true
+              exit 1
+            fi
+            echo "  Status: ${RESULT} (attempt ${i}/60)"
+            sleep 10
+          done
+          echo "❌ Timed out waiting for EC2 setup"
+          exit 1
+
+      - name: Write .env and config files to EC2
+        id: config
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Write .env and config to EC2" \
+            --timeout-seconds 120 \
+            --parameters commands='[
+              "set -euo pipefail",
+
+              "echo \"── Writing .env ──\"",
+              "cat > /var/www/app/.env <<ENVFILE\nGHCR_OWNER=aarav500\nTAG=latest\nDATABASE_URL=${{ secrets.DATABASE_URL }}\nJWT_SECRET=${{ secrets.JWT_SECRET }}\nJWT_EXPIRES_IN=1h\nCORS_ORIGIN=*\nSPACE_TRACK_USERNAME=${{ secrets.SPACE_TRACK_USERNAME }}\nSPACE_TRACK_PASSWORD=${{ secrets.SPACE_TRACK_PASSWORD }}\nNOAA_SWPC_BASE_URL=https://services.swpc.noaa.gov\nCELESTRAK_BASE_URL=https://celestrak.org\nAWS_REGION=us-east-1\nAWS_S3_BUCKET=spaceinsurance\nENVFILE",
+              "chown ubuntu:ubuntu /var/www/app/.env",
+              "chmod 600 /var/www/app/.env",
+
+              "echo \"── Downloading compose + nginx from repo ──\"",
+              "curl -fsSL https://raw.githubusercontent.com/Aarav500/Space/main/docker-compose.yml -o /var/www/app/docker-compose.yml",
+              "curl -fsSL https://raw.githubusercontent.com/Aarav500/Space/main/nginx.conf -o /var/www/app/nginx.conf",
+              "chown ubuntu:ubuntu /var/www/app/docker-compose.yml /var/www/app/nginx.conf",
+
+              "echo \"✅ Config files written\""
+            ]' \
+            --output text \
+            --query "Command.CommandId")
+
+          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for config write
+        run: |
+          for i in $(seq 1 30); do
+            RESULT=$(aws ssm get-command-invocation \
+              --command-id "${{ steps.config.outputs.command_id }}" \
+              --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+              --query "Status" --output text 2>/dev/null || echo "Pending")
+            if [ "$RESULT" = "Success" ]; then echo "✅ Config written!"; exit 0; fi
+            if [ "$RESULT" = "Failed" ] || [ "$RESULT" = "TimedOut" ]; then
+              echo "❌ Config write failed: ${RESULT}"
+              aws ssm get-command-invocation \
+                --command-id "${{ steps.config.outputs.command_id }}" \
+                --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+                --query "StandardErrorContent" --output text 2>/dev/null || true
+              exit 1
+            fi
+            sleep 5
+          done
+          exit 1
+
+  # ────────────────────────────────────────────────────────────
+  # Job 3: Build & Push Docker Images (GitHub Container Registry)
   # ────────────────────────────────────────────────────────────
   build-push:
     name: Build & Push Images
@@ -121,12 +256,12 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ────────────────────────────────────────────────────────────
-  # Job 3: Deploy to EC2 via SSM
+  # Job 4: Deploy to EC2 via SSM
   # ────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to EC2
     runs-on: ubuntu-latest
-    needs: build-push
+    needs: [setup-ec2, build-push]
 
     steps:
       - name: Configure AWS credentials
@@ -143,25 +278,34 @@ jobs:
             --instance-ids "${{ env.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy OrbitShield ${{ needs.build-push.outputs.tag }}" \
+            --timeout-seconds 300 \
             --parameters commands='[
               "set -euo pipefail",
               "cd /var/www/app",
-              "echo \"── Pulling latest images ──\"",
+
+              "echo \"── Setting env vars ──\"",
               "export TAG=${{ needs.build-push.outputs.tag }}",
-              "source .env",
-              "docker compose pull",
+              "set -a && source .env && set +a",
+
+              "echo \"── Pulling latest images ──\"",
+              "docker compose pull 2>&1 || (echo \"Images are from ghcr.io (public), no login needed\" && docker compose pull)",
+
               "echo \"── Starting services ──\"",
               "docker compose up -d --remove-orphans",
+
               "echo \"── Waiting for health check ──\"",
-              "sleep 10",
-              "curl -sf http://localhost/health || (echo \"❌ Health check failed\" && docker compose logs --tail=50 && exit 1)",
+              "sleep 15",
+              "for i in 1 2 3 4 5; do curl -sf http://localhost/health && echo \" ✅ Health OK\" && break || (echo \"  Attempt $i failed, waiting...\" && sleep 5); done",
+              "curl -sf http://localhost/health || (echo \"❌ Health check failed\" && docker compose logs --tail=80 && exit 1)",
+
               "echo \"── Syncing to S3 ──\"",
-              "aws s3 sync /var/www/app/data s3://${{ env.S3_BUCKET }} --region ${{ env.AWS_REGION }} || echo \"⚠️ S3 sync skipped (no data dir yet)\"",
+              "aws s3 sync /var/www/app/data s3://spaceinsurance --region us-east-1 2>/dev/null || echo \"⚠️ S3 sync skipped (no data dir yet)\"",
+
               "echo \"── Pruning old images ──\"",
               "docker image prune -f",
-              "echo \"✅ Deploy complete\""
+
+              "echo \"✅ Deploy complete — services running:\n$(docker compose ps)\""
             ]' \
-            --timeout-seconds 300 \
             --output text \
             --query "Command.CommandId")
 
@@ -170,30 +314,39 @@ jobs:
 
       - name: Wait for deployment to complete
         run: |
-          echo "⏳ Waiting for SSM command to complete..."
-          aws ssm wait command-executed \
-            --command-id "${{ steps.ssm.outputs.command_id }}" \
-            --instance-id "${{ env.EC2_INSTANCE_ID }}" \
-            || true
-
-          # Get the result
-          RESULT=$(aws ssm get-command-invocation \
-            --command-id "${{ steps.ssm.outputs.command_id }}" \
-            --instance-id "${{ env.EC2_INSTANCE_ID }}" \
-            --query "Status" --output text)
-
-          echo "📋 Command status: ${RESULT}"
-
-          if [ "$RESULT" != "Success" ]; then
-            echo "❌ Deployment failed!"
-            aws ssm get-command-invocation \
+          echo "⏳ Waiting for deployment..."
+          for i in $(seq 1 60); do
+            RESULT=$(aws ssm get-command-invocation \
               --command-id "${{ steps.ssm.outputs.command_id }}" \
               --instance-id "${{ env.EC2_INSTANCE_ID }}" \
-              --query "StandardErrorContent" --output text
-            exit 1
-          fi
+              --query "Status" --output text 2>/dev/null || echo "Pending")
 
-          echo "✅ Deployment succeeded!"
+            if [ "$RESULT" = "Success" ]; then
+              echo "✅ Deployment succeeded!"
+              aws ssm get-command-invocation \
+                --command-id "${{ steps.ssm.outputs.command_id }}" \
+                --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" --output text 2>/dev/null || true
+              exit 0
+            elif [ "$RESULT" = "Failed" ] || [ "$RESULT" = "TimedOut" ] || [ "$RESULT" = "Cancelled" ]; then
+              echo "❌ Deployment failed with status: ${RESULT}"
+              echo "── STDOUT ──"
+              aws ssm get-command-invocation \
+                --command-id "${{ steps.ssm.outputs.command_id }}" \
+                --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+                --query "StandardOutputContent" --output text 2>/dev/null || true
+              echo "── STDERR ──"
+              aws ssm get-command-invocation \
+                --command-id "${{ steps.ssm.outputs.command_id }}" \
+                --instance-id "${{ env.EC2_INSTANCE_ID }}" \
+                --query "StandardErrorContent" --output text 2>/dev/null || true
+              exit 1
+            fi
+            echo "  Status: ${RESULT} (attempt ${i}/60)"
+            sleep 10
+          done
+          echo "❌ Timed out waiting for deployment"
+          exit 1
 
       - name: Post-deploy summary
         if: always()
