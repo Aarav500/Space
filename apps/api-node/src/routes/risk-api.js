@@ -9,15 +9,16 @@ const { Router } = require("express");
 const { query } = require("../db");
 const { apiKeyMiddleware } = require("../middleware/auth");
 const { computeCollisionProbability, classifyRisk } = require("../services/risk-engine");
+const { validateNoradId } = require("../middleware/validate");
 
 const router = Router();
 
 /* ─── GET /api/v1/risk-score/:noradId ──────────────────────────────── */
 router.get("/:noradId", apiKeyMiddleware, async (req, res, next) => {
   try {
-    const noradId = parseInt(req.params.noradId);
-    if (isNaN(noradId)) {
-      return res.status(400).json({ error: "noradId must be a number" });
+    const { value: noradId, error: noradErr } = validateNoradId(req.params.noradId);
+    if (noradErr) {
+      return res.status(400).json({ error: noradErr });
     }
 
     const result = await query(
@@ -35,6 +36,9 @@ router.get("/:noradId", apiKeyMiddleware, async (req, res, next) => {
     }
 
     const sat = result.rows[0];
+
+    // Cache risk scores for 60s — they update hourly via ingestion
+    res.set("Cache-Control", "public, max-age=60");
 
     res.json({
       noradId: sat.norad_id,

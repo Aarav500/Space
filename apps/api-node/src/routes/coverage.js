@@ -1,5 +1,5 @@
 /**
- * Coverage / Insurance routes
+ * Coverage / Insurance routes — Hardened
  *
  * Route: /api/coverage
  */
@@ -9,6 +9,8 @@ const { query } = require("../db");
 const { authMiddleware } = require("../middleware/auth");
 const { computeHourlyPriceCents } = require("../services/risk-engine");
 const { ensureStripeCustomer, createCoverageCheckout } = require("../services/stripe-billing");
+const { validateUUID, validatePositiveInt } = require("../middleware/validate");
+const { rateLimiter } = require("../middleware/rate-limiter");
 
 const router = Router();
 router.use(authMiddleware);
@@ -18,11 +20,16 @@ router.post("/quote", async (req, res, next) => {
   try {
     const { satelliteId, hours } = req.body;
 
-    if (!satelliteId) {
-      return res.status(400).json({ error: "satelliteId is required" });
+    // Validate satelliteId as UUID
+    const uuidErr = validateUUID(satelliteId);
+    if (uuidErr) {
+      return res.status(400).json({ error: `satelliteId ${uuidErr}` });
     }
-    if (!hours || typeof hours !== "number" || hours < 1 || hours > 8760) {
-      return res.status(400).json({ error: "hours must be between 1 and 8760" });
+
+    // Validate hours as bounded integer
+    const { value: validHours, error: hoursErr } = validatePositiveInt(hours, 1, 8760, "hours");
+    if (hoursErr) {
+      return res.status(400).json({ error: hoursErr });
     }
 
     // Get satellite risk score
@@ -36,7 +43,7 @@ router.post("/quote", async (req, res, next) => {
 
     const sat = satResult.rows[0];
     const hourlyCents = computeHourlyPriceCents(parseFloat(sat.current_risk_score));
-    const totalCents = hourlyCents * hours;
+    const totalCents = hourlyCents * validHours;
     const maxPayoutCents = totalCents * 10; // 10x premium
 
     res.json({
@@ -44,7 +51,7 @@ router.post("/quote", async (req, res, next) => {
       satelliteName: sat.name,
       noradId: sat.norad_id,
       currentRiskScore: sat.current_risk_score,
-      hours,
+      hours: validHours,
       hourlyCents,
       totalCents,
       maxPayoutCents,
@@ -54,12 +61,25 @@ router.post("/quote", async (req, res, next) => {
 });
 
 /* ─── POST /api/coverage/checkout ──────────────────────────────────── */
-router.post("/checkout", async (req, res, next) => {
+const checkoutLimiter = rateLimiter({
+  windowMs: 60_000,
+  max: 5,
+  keyFn: (req) => req.orgId || req.ip,
+  message: "Too many checkout attempts, please slow down",
+});
+
+router.post("/checkout", checkoutLimiter, async (req, res, next) => {
   try {
     const { satelliteId, hours } = req.body;
 
-    if (!satelliteId || !hours) {
-      return res.status(400).json({ error: "satelliteId and hours are required" });
+    // Validate inputs
+    const uuidErr = validateUUID(satelliteId);
+    if (uuidErr) {
+      return res.status(400).json({ error: `satelliteId ${uuidErr}` });
+    }
+    const { value: validHours, error: hoursErr } = validatePositiveInt(hours, 1, 8760, "hours");
+    if (hoursErr) {
+      return res.status(400).json({ error: hoursErr });
     }
 
     // Get satellite
@@ -74,10 +94,16 @@ router.post("/checkout", async (req, res, next) => {
 
     // Get org info
     const orgResult = await query("SELECT name, email FROM organizations WHERE id = $1", [req.orgId]);
+    if (orgResult.rows.length === 0) {
+      return res.status(404).json({ error: "Organization not found" });
+    }
     const org = orgResult.rows[0];
 
     // Compute price
     const hourlyCents = computeHourlyPriceCents(parseFloat(sat.current_risk_score));
+    if (hourlyCents <= 0) {
+      return res.status(500).json({ error: "Invalid pricing calculation" });
+    }
 
     // Ensure Stripe customer
     const customerId = await ensureStripeCustomer(req.orgId, org.email, org.name);
@@ -86,7 +112,7 @@ router.post("/checkout", async (req, res, next) => {
     const session = await createCoverageCheckout({
       customerId,
       satelliteName: sat.name,
-      hours: parseInt(hours),
+      hours: validHours,
       hourlyCents,
       orgId: req.orgId,
       satelliteId: sat.id,

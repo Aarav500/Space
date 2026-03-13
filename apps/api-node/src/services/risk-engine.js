@@ -45,6 +45,15 @@ function computeCollisionProbability({
   positionUncertaintyKm = 1.0,
   hardBodyRadiusKm = 0.01,
 }) {
+  // ── Input guards ──────────────────────────────────────────────────
+  if (!Number.isFinite(missDistanceKm)) missDistanceKm = 0;
+  missDistanceKm = Math.abs(missDistanceKm);
+  if (!Number.isFinite(relativeVelocityKms)) relativeVelocityKms = 10;
+  if (!Number.isFinite(kpIndex)) kpIndex = 2;
+  kpIndex = Math.max(0, Math.min(9, kpIndex));
+  if (!Number.isFinite(positionUncertaintyKm) || positionUncertaintyKm <= 0) positionUncertaintyKm = 1.0;
+  if (!Number.isFinite(hardBodyRadiusKm) || hardBodyRadiusKm <= 0) hardBodyRadiusKm = 0.01;
+
   // Space weather modifier: higher Kp = more atmospheric drag = more orbital uncertainty
   const kpModifier = 1 + (kpIndex / 9) * 0.5; // 1.0–1.5x uncertainty inflation
   const sigma = positionUncertaintyKm * kpModifier;

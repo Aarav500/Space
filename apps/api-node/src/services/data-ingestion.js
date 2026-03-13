@@ -22,22 +22,28 @@ async function refreshTLEData() {
     const result = await query("SELECT id, norad_id FROM satellites");
     const satellites = result.rows;
 
+    let failures = 0;
     for (const sat of satellites) {
-      const gp = await fetchGPByNoradId(sat.norad_id);
-      if (gp) {
-        await query(
-          `UPDATE satellites
-           SET name = COALESCE($1, name), tle_line1 = $2, tle_line2 = $3,
-               tle_epoch = $4, orbit_type = $5, last_updated = now()
-           WHERE id = $6`,
-          [gp.name, gp.tleLine1, gp.tleLine2, gp.epoch, gp.orbitType, sat.id]
-        );
+      try {
+        const gp = await fetchGPByNoradId(sat.norad_id);
+        if (gp) {
+          await query(
+            `UPDATE satellites
+             SET name = COALESCE($1, name), tle_line1 = $2, tle_line2 = $3,
+                 tle_epoch = $4, orbit_type = $5, last_updated = now()
+             WHERE id = $6`,
+            [gp.name, gp.tleLine1, gp.tleLine2, gp.epoch, gp.orbitType, sat.id]
+          );
+        }
+      } catch (err) {
+        failures++;
+        console.error(`[Ingestion:DeadLetter] TLE refresh failed for NORAD ${sat.norad_id}:`, err.message);
       }
       // Rate limit: 200ms between requests
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    console.log(`[Ingestion] TLE refresh complete — ${satellites.length} satellites updated`);
+    console.log(`[Ingestion] TLE refresh complete — ${satellites.length} satellites, ${failures} failures`);
   } catch (err) {
     console.error("[Ingestion] TLE refresh error:", err.message);
   }
@@ -87,39 +93,45 @@ async function computeRiskSnapshots() {
     // Get all satellites
     const satsResult = await query("SELECT id, norad_id FROM satellites");
 
+    let riskFailures = 0;
     for (const sat of satsResult.rows) {
-      // Get active conjunctions for this satellite
-      const conjResult = await query(
-        `SELECT miss_distance_km, relative_velocity_kms
-         FROM conjunction_events
-         WHERE primary_sat_id = $1 AND status = 'active' AND tca > now()
-         ORDER BY collision_probability DESC LIMIT 10`,
-        [sat.id]
-      );
+      try {
+        // Get active conjunctions for this satellite
+        const conjResult = await query(
+          `SELECT miss_distance_km, relative_velocity_kms
+           FROM conjunction_events
+           WHERE primary_sat_id = $1 AND status = 'active' AND tca > now()
+           ORDER BY collision_probability DESC LIMIT 10`,
+          [sat.id]
+        );
 
-      const { compositeScore, riskLevel } = computeCompositeRisk(
-        conjResult.rows,
-        { kp: parseFloat(weather.kp_index), f107: parseFloat(weather.f107_flux) }
-      );
+        const { compositeScore, riskLevel } = computeCompositeRisk(
+          conjResult.rows,
+          { kp: parseFloat(weather.kp_index), f107: parseFloat(weather.f107_flux) }
+        );
 
-      const priceCents = computeHourlyPriceCents(compositeScore);
+        const priceCents = computeHourlyPriceCents(compositeScore);
 
-      // Insert risk snapshot
-      await query(
-        `INSERT INTO risk_snapshots
-         (satellite_id, snapshot_time, risk_score, kp_index, f107_flux, active_conjunctions, pricing_rate_cents)
-         VALUES ($1, now(), $2, $3, $4, $5, $6)`,
-        [sat.id, compositeScore, weather.kp_index, weather.f107_flux, conjResult.rows.length, priceCents]
-      );
+        // Insert risk snapshot
+        await query(
+          `INSERT INTO risk_snapshots
+           (satellite_id, snapshot_time, risk_score, kp_index, f107_flux, active_conjunctions, pricing_rate_cents)
+           VALUES ($1, now(), $2, $3, $4, $5, $6)`,
+          [sat.id, compositeScore, weather.kp_index, weather.f107_flux, conjResult.rows.length, priceCents]
+        );
 
-      // Update satellite current risk
-      await query(
-        `UPDATE satellites SET current_risk_score = $1, risk_level = $2, last_updated = now() WHERE id = $3`,
-        [compositeScore, riskLevel, sat.id]
-      );
+        // Update satellite current risk
+        await query(
+          `UPDATE satellites SET current_risk_score = $1, risk_level = $2, last_updated = now() WHERE id = $3`,
+          [compositeScore, riskLevel, sat.id]
+        );
+      } catch (err) {
+        riskFailures++;
+        console.error(`[Ingestion:DeadLetter] Risk snapshot failed for satellite ${sat.id}:`, err.message);
+      }
     }
 
-    console.log(`[Ingestion] Risk snapshots computed for ${satsResult.rows.length} satellites`);
+    console.log(`[Ingestion] Risk snapshots computed for ${satsResult.rows.length} satellites, ${riskFailures} failures`);
   } catch (err) {
     console.error("[Ingestion] Risk snapshot error:", err.message);
   }

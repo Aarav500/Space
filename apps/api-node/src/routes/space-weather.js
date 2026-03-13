@@ -1,5 +1,5 @@
 /**
- * Space Weather routes
+ * Space Weather routes — Hardened
  *
  * Route: /api/space-weather
  */
@@ -8,6 +8,7 @@ const { Router } = require("express");
 const { query } = require("../db");
 const { authMiddleware } = require("../middleware/auth");
 const { getCurrentSpaceWeather, fetch3DayForecast } = require("../services/noaa");
+const { validatePositiveInt } = require("../middleware/validate");
 
 const router = Router();
 router.use(authMiddleware);
@@ -22,6 +23,8 @@ router.get("/current", async (req, res, next) => {
 
     if (cached.rows.length > 0) {
       const row = cached.rows[0];
+      // Cache for 5 minutes — weather updates every 30 min
+      res.set("Cache-Control", "public, max-age=300");
       return res.json({
         kp: parseFloat(row.kp_index),
         f107: parseFloat(row.f107_flux) || 0,
@@ -41,6 +44,8 @@ router.get("/current", async (req, res, next) => {
 router.get("/forecast", async (req, res, next) => {
   try {
     const forecast = await fetch3DayForecast();
+    // Cache for 30 minutes
+    res.set("Cache-Control", "public, max-age=1800");
     res.json({ data: forecast });
   } catch (err) { next(err); }
 });
@@ -48,7 +53,11 @@ router.get("/forecast", async (req, res, next) => {
 /* ─── GET /api/space-weather/history ───────────────────────────────── */
 router.get("/history", async (req, res, next) => {
   try {
-    const hours = parseInt(req.query.hours) || 72;
+    const { value: hours, error: hoursErr } = validatePositiveInt(req.query.hours || "72", 1, 720, "hours");
+    if (hoursErr) {
+      return res.status(400).json({ error: hoursErr });
+    }
+
     const result = await query(
       `SELECT observation_time, kp_index, f107_flux, storm_level
        FROM space_weather

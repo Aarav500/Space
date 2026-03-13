@@ -1,5 +1,5 @@
 /**
- * Satellite routes
+ * Satellite routes — Hardened
  *
  * Route: /api/satellites
  * All routes require JWT auth.
@@ -11,6 +11,7 @@ const { authMiddleware } = require("../middleware/auth");
 const { fetchGPByNoradId } = require("../services/celestrak");
 const { computeCompositeRisk, generate72hForecast, classifyRisk } = require("../services/risk-engine");
 const { getCurrentSpaceWeather } = require("../services/noaa");
+const { validateNoradId, validatePositiveInt, sanitizeString } = require("../middleware/validate");
 
 const router = Router();
 router.use(authMiddleware);
@@ -32,29 +33,41 @@ router.post("/", async (req, res, next) => {
   try {
     const { noradId, name } = req.body;
 
-    if (!noradId || typeof noradId !== "number") {
-      return res.status(400).json({ error: "noradId (number) is required" });
+    // Validate noradId
+    const { value: validNorad, error: noradErr } = validateNoradId(noradId);
+    if (noradErr) {
+      return res.status(400).json({ error: noradErr });
+    }
+
+    // Sanitize name if provided
+    let satName = null;
+    if (name !== undefined && name !== null) {
+      const { value: cleanName, error: nameErr } = sanitizeString(name, 255);
+      if (nameErr) {
+        return res.status(400).json({ error: `name ${nameErr}` });
+      }
+      satName = cleanName;
     }
 
     // Check if already tracked by this org
     const existing = await query(
       "SELECT id FROM satellites WHERE norad_id = $1",
-      [noradId]
+      [validNorad]
     );
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: "Satellite already tracked" });
     }
 
     // Fetch TLE from CelesTrak
-    const gp = await fetchGPByNoradId(noradId);
-    const satName = name || gp?.name || `SAT-${noradId}`;
+    const gp = await fetchGPByNoradId(validNorad);
+    const finalName = satName || gp?.name || `SAT-${validNorad}`;
     const orbitType = gp?.orbitType || "LEO";
 
     const result = await query(
       `INSERT INTO satellites (org_id, norad_id, name, orbit_type, tle_line1, tle_line2, tle_epoch)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, norad_id, name, orbit_type, current_risk_score, risk_level, created_at`,
-      [req.orgId, noradId, satName, orbitType, gp?.tleLine1 || null, gp?.tleLine2 || null, gp?.epoch || null]
+      [req.orgId, validNorad, finalName, orbitType, gp?.tleLine1 || null, gp?.tleLine2 || null, gp?.epoch || null]
     );
 
     res.status(201).json({ data: result.rows[0] });
@@ -115,7 +128,11 @@ router.get("/:id/risk", async (req, res, next) => {
 /* ─── GET /api/satellites/:id/conjunctions ─────────────────────────── */
 router.get("/:id/conjunctions", async (req, res, next) => {
   try {
-    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 365);
+    const { value: days, error: daysErr } = validatePositiveInt(req.query.days || "7", 1, 365, "days");
+    if (daysErr) {
+      return res.status(400).json({ error: daysErr });
+    }
+
     const result = await query(
       `SELECT id, secondary_norad_id, secondary_name, tca, miss_distance_km,
               relative_velocity_kms, collision_probability, source, status, created_at
@@ -131,7 +148,11 @@ router.get("/:id/conjunctions", async (req, res, next) => {
 /* ─── GET /api/satellites/:id/risk-history ──────────────────────────── */
 router.get("/:id/risk-history", async (req, res, next) => {
   try {
-    const hours = parseInt(req.query.hours) || 168;
+    const { value: hours, error: hoursErr } = validatePositiveInt(req.query.hours || "168", 1, 8760, "hours");
+    if (hoursErr) {
+      return res.status(400).json({ error: hoursErr });
+    }
+
     const result = await query(
       `SELECT snapshot_time, risk_score, ml_prediction_72h, kp_index, f107_flux,
               active_conjunctions, pricing_rate_cents

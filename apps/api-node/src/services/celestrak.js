@@ -1,25 +1,31 @@
 /**
- * CelesTrak API Client
+ * CelesTrak API Client — Hardened
  *
  * Fetches TLE/GP orbital data and SOCRATES conjunction reports.
- * No authentication required — free public API.
+ * All calls are wrapped in circuit breaker with request timeouts.
  *
  * Docs: https://celestrak.org/NORAD/documentation/
  */
 
+const { celestrakBreaker } = require("./circuit-breaker");
+
 const CELESTRAK_BASE = process.env.CELESTRAK_BASE_URL || "https://celestrak.org";
+const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * Fetch GP data for a satellite by NORAD catalog number.
  * Returns TLE lines and metadata in JSON format.
+ * Protected by circuit breaker with 10s timeout.
  * @param {number} noradId
  * @returns {Promise<object|null>}
  */
 async function fetchGPByNoradId(noradId) {
-  try {
+  return celestrakBreaker.exec(async () => {
     const url = `${CELESTRAK_BASE}/NORAD/elements/gp.php?CATNR=${noradId}&FORMAT=json`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
+    const res = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (!res.ok) {
+      throw new Error(`CelesTrak GP responded with ${res.status}`);
+    }
 
     const data = await res.json();
     if (!Array.isArray(data) || data.length === 0) return null;
@@ -39,25 +45,23 @@ async function fetchGPByNoradId(noradId) {
       tleLine2: gp.TLE_LINE2,
       orbitType: classifyOrbit(gp.MEAN_MOTION, gp.ECCENTRICITY),
     };
-  } catch (err) {
-    console.error(`[CelesTrak] Error fetching GP for NORAD ${noradId}:`, err.message);
-    return null;
-  }
+  }, null);
 }
 
 /**
  * Fetch SOCRATES conjunction data (top close approaches).
- * Returns array of conjunction events from the latest report.
+ * Protected by circuit breaker with 10s timeout.
  * @returns {Promise<object[]>}
  */
 async function fetchSOCRATES() {
-  try {
+  return celestrakBreaker.exec(async () => {
     const url = `${CELESTRAK_BASE}/SOCRATES/search-results.php?ESSION=&CONSTELLATION=ALL&FORMAT=json`;
-    const res = await fetch(url);
-    if (!res.ok) return [];
+    const res = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (!res.ok) {
+      throw new Error(`CelesTrak SOCRATES responded with ${res.status}`);
+    }
 
     const text = await res.text();
-    // SOCRATES may return CSV or JSON depending on parameters
     try {
       const data = JSON.parse(text);
       if (!Array.isArray(data)) return [];
@@ -73,10 +77,7 @@ async function fetchSOCRATES() {
     } catch {
       return [];
     }
-  } catch (err) {
-    console.error("[CelesTrak] Error fetching SOCRATES:", err.message);
-    return [];
-  }
+  }, []);
 }
 
 /**

@@ -6,6 +6,8 @@ const crypto = require("crypto");
 
 const exampleRouter = require("./routes/example");
 const { experimentsMiddleware, flagsRouter } = require("./middleware/experiments");
+const { rateLimiter } = require("./middleware/rate-limiter");
+const { celestrakBreaker, noaaBreaker } = require("./services/circuit-breaker");
 
 /* OrbitShield routes */
 const authRouter = require("./routes/auth");
@@ -66,6 +68,18 @@ app.use((req, res, next) => {
 /* ────────────────────────── Middleware: JSON body & CORS ──────────── */
 app.use(express.json({ limit: "1mb" }));
 
+/* ────────────────────────── Middleware: Security headers ──────────── */
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
+
+/* ────────────────────────── Middleware: Global rate limiter ────────── */
+app.use(rateLimiter({ windowMs: 60_000, max: 100 }));
+
 const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:3000")
   .split(",")
   .map((o) => o.trim());
@@ -125,6 +139,10 @@ app.get("/health", (_req, res) => {
     service: SERVICE_NAME,
     version: SERVICE_VERSION,
     time: new Date().toISOString(),
+    circuitBreakers: {
+      celestrak: celestrakBreaker.status(),
+      noaa: noaaBreaker.status(),
+    },
   });
 });
 
@@ -161,7 +179,8 @@ app.use("/api/flags", flagsRouter);
 //   app.use("/api/users", usersRouter);
 
 /* ─── OrbitShield routes ───────────────────────────────────────────── */
-app.use("/api/auth", authRouter);
+const authLimiter = rateLimiter({ windowMs: 60_000, max: 10 });
+app.use("/api/auth", authLimiter, authRouter);
 app.use("/api/satellites", satellitesRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/space-weather", spaceWeatherRouter);

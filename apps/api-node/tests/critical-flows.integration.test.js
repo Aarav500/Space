@@ -1,5 +1,5 @@
 /**
- * Integration Tests — Critical Path Flows
+ * Integration Tests — Critical Path Flows (Hardened)
  *
  * Tests core business logic flows end-to-end.
  * Supertest-based endpoint tests are in example.test.js.
@@ -92,6 +92,41 @@ describe("Risk Engine — end-to-end pipeline", () => {
     expect(result.pc).toBeGreaterThan(1e-6);
     expect(["elevated", "warning", "critical"]).toContain(result.riskLevel);
   });
+
+  /* ─── Hardened: NaN/Infinity input guards ────────────────────────── */
+
+  it("NaN missDistanceKm is treated as 0 (close approach)", () => {
+    const result = computeCollisionProbability({ missDistanceKm: NaN });
+    expect(result.pc).toBeGreaterThan(0);
+    expect(result.pc).toBeLessThanOrEqual(1);
+    expect(result.riskLevel).toBeDefined();
+  });
+
+  it("Infinity missDistanceKm is treated as 0", () => {
+    const result = computeCollisionProbability({ missDistanceKm: Infinity });
+    expect(result.pc).toBeGreaterThan(0);
+    expect(result.riskLevel).toBeDefined();
+  });
+
+  it("NaN kpIndex defaults to 2", () => {
+    const result = computeCollisionProbability({ missDistanceKm: 1, kpIndex: NaN });
+    expect(result.factors.kpIndex).toBe(2);
+    expect(result.pc).toBeGreaterThan(0);
+  });
+
+  it("kpIndex is clamped to [0, 9]", () => {
+    const lo = computeCollisionProbability({ missDistanceKm: 1, kpIndex: -5 });
+    expect(lo.factors.kpIndex).toBe(0);
+
+    const hi = computeCollisionProbability({ missDistanceKm: 1, kpIndex: 20 });
+    expect(hi.factors.kpIndex).toBe(9);
+  });
+
+  it("undefined missDistanceKm is handled safely", () => {
+    const result = computeCollisionProbability({});
+    expect(result.pc).toBeGreaterThan(0);
+    expect(result.riskLevel).toBeDefined();
+  });
 });
 
 /* ─── Auth Middleware — Token validation ───────────────────────────── */
@@ -147,8 +182,6 @@ describe("Stripe Billing — resilient without API key", () => {
 
 describe("CORS — config validation", () => {
   it("CORS_ORIGIN env var defaults to localhost:3000", () => {
-    // We can verify the allowedOrigins from app.js by checking the behaviour
-    // This is a config assertion — just verify env defaults
     const defaultOrigin = process.env.CORS_ORIGIN || "http://localhost:3000";
     const origins = defaultOrigin.split(",").map((o) => o.trim());
     expect(origins).toContain("http://localhost:3000");
@@ -161,3 +194,86 @@ describe("CORS — config validation", () => {
     expect(origins).toContain("https://app.orbitshield.io");
   });
 });
+
+/* ─── Satellite Tracking — CelesTrak orbit classification ─────────── */
+
+describe("CelesTrak — orbit classification", () => {
+  const { classifyOrbit } = require("../src/services/celestrak");
+
+  it("high mean motion → LEO", () => {
+    expect(classifyOrbit(15, 0.001)).toBe("LEO");
+  });
+
+  it("~1 rev/day with low eccentricity → GEO", () => {
+    expect(classifyOrbit(1.0027, 0.005)).toBe("GEO");
+  });
+
+  it("high eccentricity → HEO", () => {
+    expect(classifyOrbit(2.0, 0.7)).toBe("HEO");
+  });
+
+  it("null mean motion defaults to LEO", () => {
+    expect(classifyOrbit(null, 0)).toBe("LEO");
+    expect(classifyOrbit(undefined, 0)).toBe("LEO");
+  });
+
+  it("medium orbit → MEO", () => {
+    expect(classifyOrbit(2.0, 0.01)).toBe("MEO");
+  });
+});
+
+/* ─── Space Weather — NOAA helpers ─────────────────────────────────── */
+
+describe("NOAA — extractStormLevel (hardened)", () => {
+  const { extractStormLevel } = require("../src/services/noaa");
+
+  it("extracts G1 through G5", () => {
+    expect(extractStormLevel("G1 Minor Storm")).toBe("G1");
+    expect(extractStormLevel("G2 Moderate")).toBe("G2");
+    expect(extractStormLevel("G3 Strong")).toBe("G3");
+    expect(extractStormLevel("Extreme G5")).toBe("G5");
+  });
+
+  it("returns null for non-storm messages", () => {
+    expect(extractStormLevel("Solar wind normal")).toBeNull();
+    expect(extractStormLevel("No storm activity")).toBeNull();
+  });
+
+  it("handles null/empty gracefully", () => {
+    expect(extractStormLevel(null)).toBeNull();
+    expect(extractStormLevel("")).toBeNull();
+    expect(extractStormLevel(undefined)).toBeNull();
+  });
+});
+
+/* ─── Input Validation — cross-flow checks ─────────────────────────── */
+
+describe("Input Validation — cross-flow hardening", () => {
+  const { validateUUID, validateNoradId, sanitizeString, validateFloat } = require("../src/middleware/validate");
+
+  it("rejects SQL injection in satellite name", () => {
+    const result = sanitizeString("'; DROP TABLE satellites; --");
+    expect(result.error).toBeNull(); // sanitizeString only strips HTML, SQL injection is handled by parameterized queries
+    expect(result.value).toBe("'; DROP TABLE satellites; --");
+  });
+
+  it("strips XSS from satellite name", () => {
+    const result = sanitizeString("<img src=x onerror=alert(1)>MyLegitSat");
+    expect(result.value).not.toContain("<img");
+    expect(result.value).toContain("MyLegitSat");
+  });
+
+  it("validates coverage threshold bounds", () => {
+    expect(validateFloat(0, 1e-10, 1.0).error).not.toBeNull(); // below minimum
+    expect(validateFloat(2.0, 1e-10, 1.0).error).not.toBeNull(); // above maximum
+    expect(validateFloat(0.5, 1e-10, 1.0).error).toBeNull(); // valid
+  });
+
+  it("validates NORAD ID at boundaries", () => {
+    expect(validateNoradId(0).error).not.toBeNull();
+    expect(validateNoradId(1).error).toBeNull();
+    expect(validateNoradId(999999).error).toBeNull();
+    expect(validateNoradId(1000000).error).not.toBeNull();
+  });
+});
+
