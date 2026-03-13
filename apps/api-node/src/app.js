@@ -7,6 +7,15 @@ const crypto = require("crypto");
 const exampleRouter = require("./routes/example");
 const { experimentsMiddleware, flagsRouter } = require("./middleware/experiments");
 
+/* OrbitShield routes */
+const authRouter = require("./routes/auth");
+const satellitesRouter = require("./routes/satellites");
+const dashboardRouter = require("./routes/dashboard");
+const spaceWeatherRouter = require("./routes/space-weather");
+const alertsRouter = require("./routes/alerts");
+const coverageRouter = require("./routes/coverage");
+const riskApiRouter = require("./routes/risk-api");
+
 const app = express();
 
 /* ────────────────────────── Observability: Config ─────────────────── */
@@ -56,9 +65,18 @@ app.use((req, res, next) => {
 
 /* ────────────────────────── Middleware: JSON body & CORS ──────────── */
 app.use(express.json({ limit: "1mb" }));
+
+const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim());
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+    origin: (origin, cb) => {
+      // Allow requests with no origin (server-to-server, curl, health checks)
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      cb(new Error(`CORS: origin ${origin} not allowed`));
+    },
+    credentials: true,
   })
 );
 
@@ -141,6 +159,15 @@ app.use("/api/flags", flagsRouter);
 // Example:
 //   const usersRouter = require("./routes/users");
 //   app.use("/api/users", usersRouter);
+
+/* ─── OrbitShield routes ───────────────────────────────────────────── */
+app.use("/api/auth", authRouter);
+app.use("/api/satellites", satellitesRouter);
+app.use("/api/dashboard", dashboardRouter);
+app.use("/api/space-weather", spaceWeatherRouter);
+app.use("/api/alerts", alertsRouter);
+app.use("/api/coverage", coverageRouter);
+app.use("/api/v1/risk-score", riskApiRouter);
 
 /* ────────────────────────── 404 handler ──────────────────────────── */
 app.use((req, res) => {
