@@ -58,8 +58,12 @@ nano apps/api-node/.env
 # Fill in: DATABASE_URL, AWS creds, etc.
 
 # Frontend env (if needed)
+# ⚠️  NEXT_PUBLIC_* vars are baked into the JS bundle at `next build` time.
+#     Use "/api" (relative) so nginx proxies to Express. Do NOT use
+#     http://localhost:4000 or http://<IP>:4000 — that bypasses nginx
+#     and breaks when the client runs in a browser on a different machine.
 cat > apps/web/.env.local << 'EOF'
-NEXT_PUBLIC_API_URL=http://<EC2_PUBLIC_IP>:4000
+NEXT_PUBLIC_API_URL=/api
 EOF
 ```
 

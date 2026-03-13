@@ -10,7 +10,9 @@
  */
 
 export const API_BASE: string =
-  process.env.NEXT_PUBLIC_API_URL || "/api";
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "/api";
 
 /* ── Runtime guard ──────────────────────────────────────────────────
  * Warns during development if API_BASE still points at localhost while
@@ -24,7 +26,7 @@ if (typeof window !== "undefined") {
     window.location.hostname === "127.0.0.1";
 
   if (isApiLocalhost && !isPageLocalhost) {
-    console.warn(
+    console.error(
       `[OrbitShield] API_BASE is "${API_BASE}" but the page is served ` +
         `from "${window.location.host}". The client bundle may be ` +
         `calling localhost instead of the production API. Set ` +
