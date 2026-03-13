@@ -333,15 +333,24 @@ jobs:
       FRONTEND_URL: http://54.89.165.112
       API_URL: http://54.89.165.112/api
     steps:
-      - name: Wait for services to stabilize
-        run: sleep 30
-
-      - name: API Health Check
+      - name: API Health Check (with retries)
         id: health
         run: |
           echo "## API Health Check" >> $GITHUB_STEP_SUMMARY
-          HTTP_CODE=$(curl -sS -o /tmp/health.json -w "%{http_code}" --max-time 15 "${{ env.API_URL }}/health" 2>/dev/null || echo "000")
-          LATENCY=$(curl -sS -o /dev/null -w "%{time_total}" --max-time 15 "${{ env.API_URL }}/health" 2>/dev/null || echo "timeout")
+          echo "Waiting for API to become healthy (up to 2 minutes)..."
+
+          HTTP_CODE="000"
+          LATENCY="timeout"
+          for i in $(seq 1 12); do
+            HTTP_CODE=$(curl -sS -o /tmp/health.json -w "%{http_code}" --max-time 10 "${{ env.API_URL }}/health" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              LATENCY=$(curl -sS -o /dev/null -w "%{time_total}" --max-time 10 "${{ env.API_URL }}/health" 2>/dev/null || echo "timeout")
+              echo "API healthy after ~$((i * 10))s"
+              break
+            fi
+            echo "  Attempt ${i}/12: HTTP ${HTTP_CODE}, retrying in 10s..."
+            sleep 10
+          done
 
           echo "health_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
           echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
@@ -361,8 +370,8 @@ jobs:
             echo "| CelesTrak Breaker | ${CB_CELESTRAK} |" >> $GITHUB_STEP_SUMMARY
             echo "| NOAA Breaker | ${CB_NOAA} |" >> $GITHUB_STEP_SUMMARY
           else
-            echo "| API Health | ❌ HTTP ${HTTP_CODE} |" >> $GITHUB_STEP_SUMMARY
-            echo "::error::API health check failed with HTTP ${HTTP_CODE}"
+            echo "| API Health | ❌ HTTP ${HTTP_CODE} (after 12 retries) |" >> $GITHUB_STEP_SUMMARY
+            echo "::error::API health check failed with HTTP ${HTTP_CODE} after 2 minutes of retries"
           fi
 
       - name: Key Endpoint Checks
