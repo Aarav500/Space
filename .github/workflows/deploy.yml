@@ -280,7 +280,7 @@ jobs:
             --comment "Deploy OrbitShield ${{ needs.build-push.outputs.tag }}" \
             --timeout-seconds 300 \
             --parameters commands='[
-              "set -euo pipefail",
+              "set -eu",
               "cd /var/www/app",
 
               "echo \"── Setting env vars ──\"",
