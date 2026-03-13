@@ -232,7 +232,7 @@ jobs:
             ${{ env.API_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Build & push Web image (no-cache to kill stale coverage)
+      - name: Build & push Web image
         uses: docker/build-push-action@v5
         with:
           context: ./apps/web
@@ -240,7 +240,8 @@ jobs:
           tags: |
             ${{ env.WEB_IMAGE }}:${{ steps.meta.outputs.tag }}
             ${{ env.WEB_IMAGE }}:latest
-          no-cache: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ────────────────────────────────────────────────────────────
   # Job 4: Deploy (waits for both setup-ec2 and build-push)
