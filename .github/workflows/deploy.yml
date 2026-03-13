@@ -91,7 +91,7 @@ jobs:
             --comment "Setup EC2 — install Docker & prerequisites" \
             --timeout-seconds 600 \
             --parameters commands='[
-              "set -euo pipefail",
+              "set -eu",
               "echo \"═══ OrbitShield EC2 Setup ═══\"",
 
               "echo \"── 1. System update ──\"",
@@ -159,7 +159,7 @@ jobs:
             --comment "Write .env and config to EC2" \
             --timeout-seconds 120 \
             --parameters commands='[
-              "set -euo pipefail",
+              "set -eu",
 
               "echo \"── Writing .env ──\"",
               "cat > /var/www/app/.env <<ENVFILE\nGHCR_OWNER=aarav500\nTAG=latest\nDATABASE_URL=${{ secrets.DATABASE_URL }}\nJWT_SECRET=${{ secrets.JWT_SECRET }}\nJWT_EXPIRES_IN=1h\nCORS_ORIGIN=*\nSPACE_TRACK_USERNAME=${{ secrets.SPACE_TRACK_USERNAME }}\nSPACE_TRACK_PASSWORD=${{ secrets.SPACE_TRACK_PASSWORD }}\nNOAA_SWPC_BASE_URL=https://services.swpc.noaa.gov\nCELESTRAK_BASE_URL=https://celestrak.org\nAWS_REGION=us-east-1\nAWS_S3_BUCKET=spaceinsurance\nENVFILE",
