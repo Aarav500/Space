@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "test": "SET NODE_ENV=test&& jest --runInBand --forceExit",
-    "test:integration": "SET NODE_ENV=test&& jest --runInBand --forceExit --testPathPattern=integration"
+    "test": "cross-env NODE_ENV=test jest --runInBand --forceExit",
+    "test:integration": "cross-env NODE_ENV=test jest --runInBand --forceExit --testPathPattern=integration"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -21,6 +21,7 @@
     "stripe": "^20.4.1"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "jest": "^29.7.0",
     "nodemon": "^3.1.9",
     "pg-mem": "^3.0.14",
