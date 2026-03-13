@@ -27,8 +27,8 @@ env:
   EC2_INSTANCE_ID: i-0a2969b26c6b89544
   S3_BUCKET: spaceinsurance
   REGISTRY: ghcr.io
-  API_IMAGE: ghcr.io/${{ github.repository_owner }}/orbitshield-api
-  WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/orbitshield-web
+  API_IMAGE: ghcr.io/aarav500/orbitshield-api
+  WEB_IMAGE: ghcr.io/aarav500/orbitshield-web
 
 permissions:
   contents: read
