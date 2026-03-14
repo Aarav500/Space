@@ -268,6 +268,35 @@ function DashboardSidebar() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   MOBILE BOTTOM NAV — shown on small screens
+   ═══════════════════════════════════════════════════════════════════════ */
+
+function MobileBottomNav() {
+  const pathname = usePathname();
+
+  return (
+    <nav className="fixed bottom-0 inset-x-0 z-50 flex md:hidden border-t border-white/[0.06] bg-[#060912]/90 backdrop-blur-2xl safe-area-bottom">
+      {navItems.map((item) => {
+        const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={`flex-1 flex flex-col items-center gap-0.5 py-2.5 min-h-[52px] transition-colors ${
+              active ? "text-indigo-300" : "text-gray-600"
+            }`}
+          >
+            <span className="text-lg">{item.icon}</span>
+            <span className="text-[9px] font-mono uppercase tracking-wider">{item.label.split(" ")[0]}</span>
+            {active && <div className="h-0.5 w-4 rounded-full bg-indigo-400 mt-0.5" />}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    LAYOUT — wraps everything in AuthProvider + AuthGate
    ═══════════════════════════════════════════════════════════════════════ */
 
@@ -277,10 +306,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <AuthGate>
         <div className="min-h-screen text-white">
           <NebulaBackground />
-          <DashboardSidebar />
-          <main className="relative z-0 ml-64 min-h-screen p-8">
+          {/* Desktop sidebar — hidden on mobile */}
+          <div className="hidden md:block">
+            <DashboardSidebar />
+          </div>
+          {/* Main content — responsive margin */}
+          <main className="relative z-0 md:ml-64 min-h-screen p-4 pb-20 md:p-8 md:pb-8">
             {children}
           </main>
+          {/* Mobile bottom nav */}
+          <MobileBottomNav />
         </div>
       </AuthGate>
     </AuthProvider>
